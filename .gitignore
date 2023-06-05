@@ -1,1 +1,3 @@
-speculoos*.py
+speculoos_targetlist_specific.py
+/data/
+/data/*
