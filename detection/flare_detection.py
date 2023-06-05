@@ -1,6 +1,5 @@
-from imports import *
 from utils import *
-from flare_model import fit_davenport_model
+from modeling.flare_model import fit_davenport_model
 
 
 def get_flare_peak(flare_start, flare_stop, peaks_old, f, t):

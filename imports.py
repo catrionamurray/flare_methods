@@ -6,13 +6,12 @@ import scipy.integrate as integrate
 import scipy.constants as const
 import scipy.stats as stats
 from PyAstronomy import pyasl
-from aflare import aflare1
 from scipy.optimize import curve_fit
 import matplotlib.pyplot as plt
 import pandas as pd
 from collections import Counter
 from astropy.io import fits,ascii
-import florian_flares
+# import florian_flares
 from astropy.stats import sigma_clip
 from scipy import interpolate
 import os

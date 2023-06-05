@@ -1,7 +1,5 @@
 from imports import *
 
-
-
 def plot_binned_hist(x, y, z, xlabel, ylabel, zlabel, ytype, fname):
     from scipy.stats import binned_statistic_2d
 

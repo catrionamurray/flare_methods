@@ -4,17 +4,17 @@ from statistics.flare_stats import calculate_bol_luminosity, flare_energy
 from statistics.flare_inject_recovery import generate_flare_distribution, mod_random
 from detection.flare_detection import flare_start_stop, get_flare_peak, get_flare_region, fit_davenport_model, qcheck_flares
 from plotting.flare_plots import plot_flare_dist, plot_bar, plot_hist, plot_binned_hist, plot_hist_rot
-# from flare_model import
 from flare_rw import write_to_file, write_to_file_recovered, import_all_flares, create_flaredict
 import detection.florian_flares as florian_flares
+from modeling.aflare import aflare1
 
 class FlareLightCurve:
-    def __init__(self, jd, f, teff, rad, gaia):
-        self.t = jd
+    def __init__(self, t, f, teff, rad, id):
+        self.t = t
         self.f = f
         self.r = rad
         self.teff = teff
-        self.gaia = gaia
+        self.id = id
 
     def found_flares(self, flares_dict):
         """
