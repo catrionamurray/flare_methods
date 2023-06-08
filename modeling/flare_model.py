@@ -1,4 +1,5 @@
 from imports import *
+from aflare import aflare1
 
 def fit_davenport_model(time, flux, istart, istop, ipeak, buffer, small_flare, debug):
     # ADAPTED FROM FLATWRN

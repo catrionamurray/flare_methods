@@ -1035,7 +1035,7 @@ def normalise(a):
 
 def main(x,y,thresh,sigma,debug=False):
     # used for plotting
-    zeronr = np.int(np.min(x) / 1000.) * 1000.
+    zeronr = int(np.min(x) / 1000.) * 1000.
     x -= zeronr
     nd = daynight(x)
     # just for plotting

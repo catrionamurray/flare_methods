@@ -20,3 +20,4 @@ import warnings
 from copy import deepcopy
 from functools import partial
 from scipy.optimize import least_squares
+import astropy.units as u

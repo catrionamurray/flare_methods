@@ -1,27 +1,40 @@
 from imports import *
 from utils import *
-from statistics.flare_stats import calculate_bol_luminosity, flare_energy
-from statistics.flare_inject_recovery import generate_flare_distribution, mod_random
-from detection.flare_detection import flare_start_stop, get_flare_peak, get_flare_region, fit_davenport_model, qcheck_flares
-from plotting.flare_plots import plot_flare_dist, plot_bar, plot_hist, plot_binned_hist, plot_hist_rot
+from flare_stats import calculate_bol_luminosity, flare_energy
+from flare_detection import flare_start_stop, get_flare_peak, get_flare_region, fit_davenport_model, qcheck_flares
+from flare_plots import plot_flare_dist, plot_bar, plot_hist, plot_binned_hist, plot_hist_rot
 from flare_rw import write_to_file, write_to_file_recovered, import_all_flares, create_flaredict
-import detection.florian_flares as florian_flares
+import florian_flares as florian_flares
 from modeling.aflare import aflare1
 
 class FlareLightCurve:
-    def __init__(self, t, f, teff, rad, id):
+    def __init__(self, t, f, e, teff, rad, id):
         self.t = t
         self.f = f
+        self.mask_f = f.copy()
+        self.e = e
         self.r = rad
         self.teff = teff
         self.id = id
+        self.flares_found = False
+        self.bw_mask = np.zeros(len(t))
+        self.sat_mask = np.zeros(len(t))
+
+    def get_instrument_response(self, response_fname, wave_units="micron"):
+        # response_fname = "/appct/data/SPECULOOSPipeline/andorSPC_I+z_instrumentSR.csv"
+        if response_fname.split(".")[-1] == "csv":
+            lam, response = get_response_csv(response_fname,wave_units=wave_units)
+        elif response_fname.split(".")[-1] == "txt":
+            lam, response = get_response_txt(response_fname,wave_units=wave_units)
+        self.lam = lam
+        self.instrument_response = response
 
     def found_flares(self, flares_dict):
         """
         :param flares_dict:
         :return:
         """
-        self.flares = statistics.flare_stats.statistics.flare_stats.pd.DataFrame(flares_dict)
+        self.flares = pd.DataFrame(flares_dict)
 
     def mask_flares(self, flaremask):
         """
@@ -34,12 +47,14 @@ class FlareLightCurve:
 
     def calculate_bol_lum(self, instrument_response):
         # calculate flare energy
-        response_fname = instrument_response  # "/appct/data/SPECULOOSPipeline/andorSPC_I+z_instrumentSR.csv"
-        lam, response = statistics.flare_stats.get_response(response_fname)
-        bol_lum = statistics.flare_stats.calculate_bol_luminosity(lam, response, self.teff, self.r)
+        # response_fname = instrument_response  # "/appct/data/SPECULOOSPipeline/andorSPC_I+z_instrumentSR.csv"
+        # lam, response = get_response(response_fname)
+        if not hasattr(self, 'instrument_response'):
+            self.get_instrument_response(instrument_response)
+        bol_lum = calculate_bol_luminosity(self.lam, self.instrument_response, self.teff, self.r)
         self.bol_lum = bol_lum
 
-    def get_flares_energy(self,
+    def get_flares_energy_old(self,
                           amp_range,
                           fwhm_range,
                           mode_amp,
@@ -62,19 +77,19 @@ class FlareLightCurve:
         :return:
         """
 
-        mintime, maxtime = statistics.flare_stats.statistics.flare_stats.statistics.flare_stats.np.min(self.t), statistics.flare_stats.statistics.flare_stats.statistics.flare_stats.np.max(self.t)
-        tmodel = statistics.flare_stats.statistics.flare_stats.statistics.flare_stats.np.arange(min(self.t), max(self.t), 0.00001)
+        mintime, maxtime = np.min(self.t), np.max(self.t)
+        tmodel = np.arange(min(self.t), max(self.t), 0.00001)
 
         # maximum and minimum flare limits
-        flaremodel = aflare1(tmodel, statistics.flare_stats.statistics.flare_stats.statistics.flare_stats.np.median(tmodel), fwhm_range[0], amp_range[0])
-        minenergy = statistics.flare_stats.statistics.flare_stats.statistics.flare_stats.np.log10(statistics.flare_stats.flare_energy(tmodel, flaremodel, self.bol_lum))
-        flaremodel = aflare1(tmodel, statistics.flare_stats.statistics.flare_stats.statistics.flare_stats.np.median(tmodel), fwhm_range[1], amp_range[1])
-        maxenergy = statistics.flare_stats.statistics.flare_stats.statistics.flare_stats.np.log10(statistics.flare_stats.flare_energy(tmodel, flaremodel, self.bol_lum))
+        flaremodel = aflare1(tmodel, np.median(tmodel), fwhm_range[0], amp_range[0])
+        minenergy = np.log10(flare_energy(tmodel, flaremodel, self.bol_lum))
+        flaremodel = aflare1(tmodel, np.median(tmodel), fwhm_range[1], amp_range[1])
+        maxenergy = np.log10(flare_energy(tmodel, flaremodel, self.bol_lum))
         print("Minimum Flare Energy: %0.3f, Maximum Flare Energy: %0.3f " % (minenergy, maxenergy))
 
         flares_dict = {'peak_t': [], 'amp': [], 'fwhm': [], 'energy': []}
 
-        energybins = statistics.flare_stats.statistics.flare_stats.statistics.flare_stats.np.arange(energy_range[0], energy_range[1], e_bin)
+        energybins = np.arange(energy_range[0], energy_range[1], e_bin)
         energybins_range = [(energybins[i], energybins[i + 1]) for i in range(len(energybins) - 1)]
         print(energybins_range)
 
@@ -86,27 +101,27 @@ class FlareLightCurve:
             while n < num_flares:
                 total = total + 1
                 fwhm_dist, amp_dist = generate_flare_distribution(1, amp_range, fwhm_range, mode_amp, mode_fwhm)
-                flaremodel = aflare1(tmodel, statistics.flare_stats.statistics.flare_stats.statistics.flare_stats.np.median(tmodel), fwhm_dist[0], amp_dist[0])
-                energy = statistics.flare_stats.statistics.flare_stats.statistics.flare_stats.np.log10(statistics.flare_stats.flare_energy(tmodel, flaremodel, self.bol_lum))
+                flaremodel = aflare1(tmodel, np.median(tmodel), fwhm_dist[0], amp_dist[0])
+                energy = np.log10(flare_energy(tmodel, flaremodel, self.bol_lum))
                 if energy >= e[0] and energy <= e[1]:
-                    flares_dict['peak_t'].append(statistics.flare_stats.statistics.flare_stats.statistics.flare_stats.np.median(tmodel))
+                    flares_dict['peak_t'].append(np.median(tmodel))
                     flares_dict['amp'].append(amp_dist[0])
                     flares_dict['fwhm'].append(fwhm_dist[0])
                     flares_dict['energy'].append(energy)
                     n = n + 1
 
-            flaremodel = statistics.flare_stats.statistics.flare_stats.statistics.flare_stats.np.zeros(len(tmodel))
+            flaremodel = np.zeros(len(tmodel))
 
             for k in range(0, num_flares):
                 ingap = True
                 while ingap:
                     t_dist = (mod_random(1)[0] * (maxtime - mintime)) + mintime
-                    nearest_t = statistics.flare_stats.find_nearest(self.t, t_dist)
+                    nearest_t = find_nearest(self.t, t_dist)
                     # print(np.absolute(t_dist - self.t[nearest_t]),t_dist)
                     # ensure the surrounding +/- 2 points are within 0.01d (14.4 mins) of the flare to prevent flares in gaps/SON/EON
-                    if (statistics.flare_stats.statistics.flare_stats.statistics.flare_stats.np.absolute(t_dist - self.t[nearest_t]) < 0.01) & (
-                            statistics.flare_stats.statistics.flare_stats.statistics.flare_stats.np.absolute(t_dist - self.t[nearest_t - 2]) < 0.01) \
-                            & (statistics.flare_stats.statistics.flare_stats.statistics.flare_stats.np.absolute(t_dist - self.t[nearest_t + 2]) < 0.01):
+                    if (np.absolute(t_dist - self.t[nearest_t]) < 0.01) & (
+                            np.absolute(t_dist - self.t[nearest_t - 2]) < 0.01) \
+                            & (np.absolute(t_dist - self.t[nearest_t + 2]) < 0.01):
                         ingap = False
 
                 tpeak = t_dist
@@ -116,15 +131,15 @@ class FlareLightCurve:
                 f_with_flare = f_with_flare + flare
                 flaremodel = flaremodel + fmodel
 
-            statistics.flare_stats.plt.figure(figsize=(24, 8))
-            statistics.flare_stats.plt.title(e)
-            statistics.flare_stats.plt.plot(tmodel, flaremodel, 'g.', alpha=0.01)
-            statistics.flare_stats.plt.plot(self.t, f_with_flare - self.f, 'k.')
-            statistics.flare_stats.plt.show()
-            statistics.flare_stats.plt.close()
+            plt.figure(figsize=(24, 8))
+            plt.title(e)
+            plt.plot(tmodel, flaremodel, 'g.', alpha=0.01)
+            plt.plot(self.t, f_with_flare - self.f, 'k.')
+            plt.show()
+            plt.close()
 
         self.f_inject = f_with_flare
-        self.flares = statistics.flare_stats.statistics.flare_stats.pd.DataFrame(flares_dict)
+        self.flares = pd.DataFrame(flares_dict)
 
     def inject_flare(self,
                      nfake,
@@ -151,27 +166,27 @@ class FlareLightCurve:
         :return:
         """
 
-        mintime, maxtime = statistics.flare_stats.statistics.flare_stats.statistics.flare_stats.np.min(self.t), statistics.flare_stats.statistics.flare_stats.statistics.flare_stats.np.max(self.t)
-        tmodel = statistics.flare_stats.statistics.flare_stats.statistics.flare_stats.np.arange(min(self.t), max(self.t), 0.00001)
+        mintime, maxtime = np.min(self.t), np.max(self.t)
+        tmodel = np.arange(min(self.t), max(self.t), 0.00001)
         targ_amps, targ_fwhms, targ_tpeaks, targ_energies, targ_recovered = [], [], [], [], []
         svname = pltname + "_injectedflares.csv"
         svname_all = outname + "allinjectedflares.csv"
 
-        if statistics.flare_stats.os.path.exists(svname):
-            statistics.flare_stats.os.remove(svname)
-        if statistics.flare_stats.os.path.exists(svname.replace("injectedflares.csv", "recoveredflares.csv")):
-            statistics.flare_stats.warnings.warn(f"Rerunning the injection-recovery tests will overwrite the {svname.replace('injectedflares.csv', 'recoveredflares.csv')} file!")
-            statistics.flare_stats.os.remove(svname.replace("injectedflares.csv", "recoveredflares.csv"))
+        if os.path.exists(svname):
+            os.remove(svname)
+        if os.path.exists(svname.replace("injectedflares.csv", "recoveredflares.csv")):
+            warnings.warn(f"Rerunning the injection-recovery tests will overwrite the {svname.replace('injectedflares.csv', 'recoveredflares.csv')} file!")
+            os.remove(svname.replace("injectedflares.csv", "recoveredflares.csv"))
 
         # get RMS of each night, so that we can correlate with recovery rate
         stddev, bin_rms, error_within_bin = [], [], []
-        ts, split = statistics.flare_stats.split_multilc(self.t) # split the global LC into separate nights
-        fs = statistics.flare_stats.statistics.flare_stats.statistics.flare_stats.np.split(self.f, split)
+        ts, split = split_multilc(self.t) # split the global LC into separate nights
+        fs = np.split(self.f, split)
         for t, f in zip(ts, fs): # loop over each night
-            bin_t, bin_f, bin_e = statistics.flare_stats.bin_data(t, f, binsize)
-            stddev.append(statistics.flare_stats.statistics.flare_stats.statistics.flare_stats.np.nanstd(f))
-            bin_rms.append(statistics.flare_stats.statistics.flare_stats.statistics.flare_stats.np.nanstd(bin_f)) # get the standard deviation of binned flux
-            error_within_bin.append(statistics.flare_stats.statistics.flare_stats.statistics.flare_stats.np.nanmean(bin_e)) # get the average error within each bin
+            bin_t, bin_f, bin_e = bin_data(t, f, binsize)
+            stddev.append(np.nanstd(f))
+            bin_rms.append(np.nanstd(bin_f)) # get the standard deviation of binned flux
+            error_within_bin.append(np.nanmean(bin_e)) # get the average error within each bin
 
         for en in range(len(energybins) - 1): # loop through each energy bin
             eflares = allflares[allflares['energy'] > energybins[en]]
@@ -182,7 +197,7 @@ class FlareLightCurve:
 
             for r in range(repeat): # repeat the injection recovery tests for a user-defined number ("repeat") of times
                 f_with_flares = self.f.copy()
-                flare_fmodel = statistics.flare_stats.statistics.flare_stats.statistics.flare_stats.np.zeros(len(tmodel))
+                flare_fmodel = np.zeros(len(tmodel))
 
                 if len(eflares['energy'].values) > nfake:
                     amps, fwhms, tpeaks, energies, rednoise, whitenoise = [], [], [], [], [], []
@@ -198,14 +213,14 @@ class FlareLightCurve:
                         # if the injected flare occurs in a gap in data then generate a new flare.
                         while ingap:
                             t_dist = (mod_random(1)[0] * (maxtime - mintime)) + mintime
-                            nearest_t = statistics.flare_stats.find_nearest(self.t, t_dist)
+                            nearest_t = find_nearest(self.t, t_dist)
                             npoints = 5
                             # ensure the surrounding +/- 5 points are within 0.01d (14.4 mins) of the flare to
                             # prevent flares in gaps/SON/EON
                             if (nearest_t + npoints < len(self.t)) and (nearest_t - npoints >= 0):
-                                if (statistics.flare_stats.statistics.flare_stats.statistics.flare_stats.np.absolute(t_dist - self.t[nearest_t]) < 0.01) & (
-                                        statistics.flare_stats.statistics.flare_stats.statistics.flare_stats.np.absolute(t_dist - self.t[nearest_t - npoints]) < 0.01) \
-                                        & (statistics.flare_stats.statistics.flare_stats.statistics.flare_stats.np.absolute(t_dist - self.t[nearest_t + npoints]) < 0.01):
+                                if (np.absolute(t_dist - self.t[nearest_t]) < 0.01) & (
+                                        np.absolute(t_dist - self.t[nearest_t - npoints]) < 0.01) \
+                                        & (np.absolute(t_dist - self.t[nearest_t + npoints]) < 0.01):
                                     ingap = False
 
                         # generate synthetic flare from flare model
@@ -237,14 +252,14 @@ class FlareLightCurve:
                     targ_energies.extend(energies)
 
                     if plot:
-                        statistics.flare_stats.plt.figure(figsize=(24, 8))
-                        statistics.flare_stats.plt.title(str(energybins[en]) + " - " + str(energybins[en + 1]))
+                        plt.figure(figsize=(24, 8))
+                        plt.title(str(energybins[en]) + " - " + str(energybins[en + 1]))
                         for tp in tpeaks:
-                            statistics.flare_stats.plt.axvline(tp, color='orange')
-                        statistics.flare_stats.plt.plot(tmodel, flare_fmodel, 'g.', alpha=0.01)
-                        statistics.flare_stats.plt.plot(self.t, f_with_flares - self.f, 'k.')
-                        statistics.flare_stats.plt.savefig(pltname + "_flaremodel_energy" + str(energybins[en]) + "_n" + str(r))
-                        statistics.flare_stats.plt.close()
+                            plt.axvline(tp, color='orange')
+                        plt.plot(tmodel, flare_fmodel, 'g.', alpha=0.01)
+                        plt.plot(self.t, f_with_flares - self.f, 'k.')
+                        plt.savefig(pltname + "_flaremodel_energy" + str(energybins[en]) + "_n" + str(r))
+                        plt.close()
 
                     self.f_inject = f_with_flares
                     # self.plot_split(self.f, self.f_inject,tpeaks,pltname + "_split_energy" + str(energybins[e])+ "_n" + str(r))
@@ -266,7 +281,7 @@ class FlareLightCurve:
                     if len(i_peak) == 0:
                         print("Found no flares")
                         erec, trec, arec, frec, tpeaks_recover, amps_recover, fwhms_recover, energies_recover = [], [], [], [], [], [], [], []
-                        recovered = statistics.flare_stats.statistics.flare_stats.statistics.flare_stats.np.zeros(nfake)
+                        recovered = np.zeros(nfake)
                         # all_recovered.extend(recovered)
                         targ_recovered.extend(recovered)
                         erec.extend(recovered)
@@ -293,7 +308,7 @@ class FlareLightCurve:
                         # fs = np.split(self.f_inject, split)
 
                         # x = find_nearest(ts, tp_inject)
-                        fmask_temp = statistics.flare_stats.statistics.flare_stats.statistics.flare_stats.np.zeros(len(self.t))
+                        fmask_temp = np.zeros(len(self.t))
                         energies_recover, tpeaks_recover, amps_recover, fwhms_recover, rms_day = [], [], [], [], []
                         # fmask = flarefound
                         for istart, istop in zip(flares_start, flares_start):
@@ -312,10 +327,10 @@ class FlareLightCurve:
                                 #                                                         fittype="interp")
 
                                 ok = True
-                                popt = [statistics.flare_stats.statistics.flare_stats.statistics.flare_stats.np.nan, statistics.flare_stats.statistics.flare_stats.statistics.flare_stats.np.nan, statistics.flare_stats.statistics.flare_stats.statistics.flare_stats.np.nan]
+                                popt = [np.nan, np.nan, np.nan]
 
                                 if ok == True:
-                                    if statistics.flare_stats.statistics.flare_stats.statistics.flare_stats.np.isnan(popt[0]):
+                                    if np.isnan(popt[0]):
                                         tpeaks_recover.append(self.t[ipeak])
                                     else:
                                         tpeaks_recover.append(popt[0])
@@ -331,28 +346,28 @@ class FlareLightCurve:
 
                             if ok:
                                 try:
-                                    energy_rec = statistics.flare_stats.statistics.flare_stats.statistics.flare_stats.np.log10(
-                                        statistics.flare_stats.flare_energy(tflare, (fflare / median_model) - 1,
-                                                                            self.bol_lum))
+                                    energy_rec = np.log10(
+                                        flare_energy(tflare, (fflare / median_model) - 1,
+                                                     self.bol_lum))
 
                                     # energy_rec = np.log10(
                                     #     flare_energy(self.t[istart:istop],self.f_inject[istart:istop]/median_model[istart:istop], self.bol_lum))
                                     energies_recover.append(energy_rec)
                                 except Exception as e:
                                     print(e)
-                                    energies_recover.append(statistics.flare_stats.statistics.flare_stats.statistics.flare_stats.np.nan)
+                                    energies_recover.append(np.nan)
 
                         # recovered_tpeak = []
                         if plot:
-                            statistics.flare_stats.plt.figure(figsize=(24, 8))
-                            statistics.flare_stats.plt.title(str(energybins[en]) + " - " + str(energybins[en + 1]))
-                            statistics.flare_stats.plt.plot(tmodel, flare_fmodel, 'g.', alpha=0.01)
-                            statistics.flare_stats.plt.plot(self.t, flare_f - self.f, 'k.')
+                            plt.figure(figsize=(24, 8))
+                            plt.title(str(energybins[en]) + " - " + str(energybins[en + 1]))
+                            plt.plot(tmodel, flare_fmodel, 'g.', alpha=0.01)
+                            plt.plot(self.t, flare_f - self.f, 'k.')
 
                             for i in range(len(tpeaks)):
                                 # j = i_peak[i]
                                 # recovered_tpeak.append(self.t[j])
-                                statistics.flare_stats.plt.axvline(tpeaks[i], color='r')
+                                plt.axvline(tpeaks[i], color='r')
                                 # plt.text(x=tpeaks[i] + 0.001, y=max(flare_fmodel), s=str(i_thresh[i]))
 
                         erec, trec, arec, frec = [], [], [], []
@@ -365,16 +380,16 @@ class FlareLightCurve:
                                 # print(np.absolute(t - tp))
                                 # if np.absolute(tp_inject - tp_recover) < (10. / (24 * 60)):
                                 # rec = True
-                                if not statistics.flare_stats.statistics.flare_stats.statistics.flare_stats.np.isnan(tpeaks_recover[tp_recover]):
-                                    if statistics.flare_stats.statistics.flare_stats.statistics.flare_stats.np.absolute(tp_inject - tpeaks_recover[tp_recover]) < f_inject:
+                                if not np.isnan(tpeaks_recover[tp_recover]):
+                                    if np.absolute(tp_inject - tpeaks_recover[tp_recover]) < f_inject:
                                         # print("RECOVERED WITHIN 1 FWHM")
                                         rec = True
                                         ind = tp_recover
-                                    elif statistics.flare_stats.statistics.flare_stats.statistics.flare_stats.np.absolute(tp_inject - tpeaks_recover[tp_recover]) < (10. / (24 * 60)):
+                                    elif np.absolute(tp_inject - tpeaks_recover[tp_recover]) < (10. / (24 * 60)):
                                         print("more lenient condition")
                             if rec:
                                 if plot:
-                                    statistics.flare_stats.plt.axvline(tp_inject, color='g')
+                                    plt.axvline(tp_inject, color='g')
                                 recovered.append(1.0)
                                 targ_recovered.append(1.0)
                                 erec.append(energies_recover[ind])
@@ -398,8 +413,8 @@ class FlareLightCurve:
                         # plt.savefig(pltname + "_recovered_energy" + str(energybins[e]) + "_n" + str(r))
                         # plt.show()
                         if plot:
-                            statistics.flare_stats.plt.savefig(pltname + "_recovered_energy" + str(energybins[en]) + "_n" + str(r))
-                            statistics.flare_stats.plt.close()
+                            plt.savefig(pltname + "_recovered_energy" + str(energybins[en]) + "_n" + str(r))
+                            plt.close()
 
                             self.plot_split(self.f, self.f_inject, tpeaks, recovered,
                                             pltname + "_split_energy" + str(energybins[en]) + "_n" + str(r))
@@ -423,11 +438,11 @@ class FlareLightCurve:
 
     def inject_fake_flares(self, nfake, amp_range, fwhm_range, mode_amp, mode_fwhm):
         fwhm_dist, amp_dist = generate_flare_distribution(nfake, amp_range, fwhm_range, mode_amp, mode_fwhm)
-        mintime, maxtime = statistics.flare_stats.statistics.flare_stats.statistics.flare_stats.np.min(self.t), statistics.flare_stats.statistics.flare_stats.statistics.flare_stats.np.max(self.t)
+        mintime, maxtime = np.min(self.t), np.max(self.t)
         flares_dict = {'peak_t': [], 'amp': [], 'fwhm': [], 'energy': []}
         flare_f = self.f.copy()
-        tmodel = statistics.flare_stats.statistics.flare_stats.statistics.flare_stats.np.arange(min(self.t), max(self.t), 0.00001)
-        flare_fmodel = statistics.flare_stats.statistics.flare_stats.statistics.flare_stats.np.zeros(len(tmodel))
+        tmodel = np.arange(min(self.t), max(self.t), 0.00001)
+        flare_fmodel = np.zeros(len(tmodel))
         flare_fs, flare_ts, flare_fsbase = [], [], []
 
         # loop over the numer of fake flares you want to generate
@@ -436,86 +451,252 @@ class FlareLightCurve:
 
             while ingap:
                 t_dist = (mod_random(1)[0] * (maxtime - mintime)) + mintime
-                nearest_t = statistics.flare_stats.find_nearest(self.t, t_dist)
+                nearest_t = find_nearest(self.t, t_dist)
                 # ensure the surrounding +/- 2 points are within 0.01d (14.4 mins) of the flare to prevent flares in gaps/SON/EON
-                if (statistics.flare_stats.statistics.flare_stats.statistics.flare_stats.np.absolute(t_dist - self.t[nearest_t]) < 0.01) & (
-                        statistics.flare_stats.statistics.flare_stats.statistics.flare_stats.np.absolute(t_dist - self.t[nearest_t - 2]) < 0.01) \
-                        & (statistics.flare_stats.statistics.flare_stats.statistics.flare_stats.np.absolute(t_dist - self.t[nearest_t + 2]) < 0.01):
+                if (np.absolute(t_dist - self.t[nearest_t]) < 0.01) & (
+                        np.absolute(t_dist - self.t[nearest_t - 2]) < 0.01) \
+                        & (np.absolute(t_dist - self.t[nearest_t + 2]) < 0.01):
                     ingap = False
 
             tpeak = t_dist
             flare = aflare1(self.t, tpeak, fwhm_dist[k], amp_dist[k])
             flaremodel = aflare1(tmodel, tpeak, fwhm_dist[k], amp_dist[k])
 
-            energy = statistics.flare_stats.flare_energy(self.t, flare, self.bol_lum)
-            energymodel = statistics.flare_stats.flare_energy(tmodel, flaremodel, self.bol_lum)
-            print(statistics.flare_stats.statistics.flare_stats.statistics.flare_stats.np.log10(energy), statistics.flare_stats.statistics.flare_stats.statistics.flare_stats.np.log10(energymodel))
+            energy = flare_energy(self.t, flare, self.bol_lum)
+            energymodel = flare_energy(tmodel, flaremodel, self.bol_lum)
+            print(np.log10(energy), np.log10(energymodel))
             flare_f = flare_f + flare
             flare_fmodel = flare_fmodel + flaremodel
 
             flares_dict['peak_t'].append(t_dist)
             flares_dict['amp'].append(amp_dist[k])
             flares_dict['fwhm'].append(fwhm_dist[k])
-            flares_dict['energy'].append(statistics.flare_stats.statistics.flare_stats.statistics.flare_stats.np.log10(energymodel))
+            flares_dict['energy'].append(np.log10(energymodel))
 
             # flare_fs.extend(flare_f[flare_fistart:istop])
             # flare_fsbase.extend(flare_f[istart:istop]-self.f[istart:istop])
             # flare_ts.extend(self.t[istart:istop])
 
-        statistics.flare_stats.plt.figure(figsize=(24, 8))
-        statistics.flare_stats.plt.plot(self.t, self.f, 'k.')
-        statistics.flare_stats.plt.plot(self.t, flare_f, 'r.', alpha=0.35)
-        statistics.flare_stats.plt.ylim(0.98, 1.02)
-        statistics.flare_stats.plt.show()
-        statistics.flare_stats.plt.close()
+        plt.figure(figsize=(24, 8))
+        plt.plot(self.t, self.f, 'k.')
+        plt.plot(self.t, flare_f, 'r.', alpha=0.35)
+        plt.ylim(0.98, 1.02)
+        plt.show()
+        plt.close()
 
-        statistics.flare_stats.plt.figure(figsize=(24, 8))
-        statistics.flare_stats.plt.plot(tmodel, flare_fmodel, 'g.', alpha=0.01)
-        statistics.flare_stats.plt.plot(self.t, flare_f - self.f, 'k.')
-        statistics.flare_stats.plt.show()
-        statistics.flare_stats.plt.close()
+        plt.figure(figsize=(24, 8))
+        plt.plot(tmodel, flare_fmodel, 'g.', alpha=0.01)
+        plt.plot(self.t, flare_f - self.f, 'k.')
+        plt.show()
+        plt.close()
 
         self.f_inject = flare_f
-        self.flares = statistics.flare_stats.statistics.flare_stats.pd.DataFrame(flares_dict)
+        self.flares = pd.DataFrame(flares_dict)
 
-    def flare_detection(self, thresh, sigma):
-        flux = statistics.flare_stats.statistics.flare_stats.statistics.flare_stats.np.ma.array(self.f_inject.copy())
+    def flare_detection(self, thresh, sigma, inject=False):
+        if inject:
+            flux = np.ma.array(self.f_inject.copy())
+        else:
+            flux = np.ma.array(self.f.copy())
         time = self.t.copy()
         # with warnings.catch_warnings():
         #     warnings.simplefilter("ignore")
-        flarefound, t_axis, i_peak, i_thresh = florian_flares.main(time, flux, thresh, sigma, debug=False)
+        flares, t_axis, i_peak, i_thresh = florian_flares.main(time, flux, thresh, sigma, debug=False)
+        self.flare_mask = flares
+
+        # sort peaks chronologically
+        i_thresh = [j for _, j in sorted(zip(i_peak, i_thresh))]
+        i_peak = sorted(i_peak)
+        self.flare_i_peak = i_peak
+        self.flare_i_thresh = i_thresh
+        print(i_peak, i_thresh)
+
+        if len(i_peak) > 0:
+            self.flares_found = True
 
         print("flare recovery done")
-        return flarefound, i_peak, i_thresh
+        return flares, i_peak, i_thresh
+
+    def get_flare_energies(self, instrument_response=None, svplt="", do_plot=True, show=True):
+        if self.flares_found == True:
+            try:
+                if self.r is None:
+                    calc_en = False
+                else:
+                    calc_en = True
+
+                if not hasattr(self, 'response'):
+                    if instrument_response is not None:
+                        self.get_instrument_response(instrument_response)
+                    else:
+                        warnings.warn("We cannot fit the flares without an instrument response!")
+                self.fit_flares(calc_en, self.lam, self.instrument_response, svplt, do_plot, show)
+
+            except Exception as e:
+                print(e)
+
+
+    def fit_flares(self, calc_en=True, svplt="", do_plot=True, show=True, **kw):
+        if self.flares_found == True:
+            num_flare = 0
+            newsvplt = svplt
+            model_fl = True
+            self.flare_tpeaks = []
+            self.flare_fwhms = []
+            self.flare_amps = []
+            self.flare_energies = []
+            self.flare_model_energies = []
+            self.flare_fmodel = []
+            self.flare_fmodelmed = []
+            self.flare_tmodel = []
+            self.flare_tstart = []
+            self.flare_tend = []
+            print(self.flare_i_peak)
+
+            # vet the flares - check that they aren't cause by bad weather
+            flares_start, flares_stop = check_flares_bw(self.flare_mask, self.bw_mask, self.flare_i_peak)
+
+            fmask_temp = np.zeros(len(self.flare_mask))
+            fmask = self.flare_mask
+            for istart in flares_start:
+                fmask_temp[istart:istart + 10] = 1
+
+            for i, (istart, istop, ipeak) in enumerate(zip(flares_start, flares_stop, self.flare_i_peak)):
+                print(istart, istop, ipeak)
+                # try:
+                num_flare = num_flare + 1
+
+                # check the peak is in the right place.
+                peak_index = np.argmax(self.mask_f[istart:istart+20])
+                if peak_index + istart != ipeak:
+                    warnings.warn("The peak determined by the flare detection code is likely not the real peak. Fixing this now...")
+                    print(peak_index+istart, ipeak)
+                    ipeak  = peak_index + istart
+                    self.flare_i_peak[i] = ipeak
+
+                if svplt != '':
+                    newsvplt = svplt + "_" + str(num_flare)
+
+                 # vet the flares - check they aren't cosmics
+                ok, tmodel, fmodel_median, fmodel, popt = qcheck_flares(self.t, self.mask_f, istart, istop, ipeak, fmask_temp,
+                                                                            self.sat_mask,svplt=newsvplt, show=show, do_plot=do_plot,
+                                                                            **kw
+                                                                            )
+
+                if ok:
+                    # fstart
+                    self.flare_tstart.append(self.t[istart])
+                    self.flare_tend.append(self.t[istop])
+                    # fend.append(self.t[istop])
+
+                    if model_fl:
+                        # popts.append(popt)
+                        self.flare_tpeaks.append(popt[0])
+                        self.flare_fwhms.append(popt[1])
+                        self.flare_amps.append(popt[2])
+
+                        self.flare_fmodel.append(fmodel+1)
+                        self.flare_fmodelmed.append(fmodel_median)
+                        self.flare_tmodel.append(tmodel)
+
+                else:
+                    fmask[istart:istop] = 0
+                    continue
+                # except Exception as e:
+                #     print(e)
+                # popt,tmodel,fmodel = [np.nan,np.nan,np.nan],[np.nan],[np.nan]
+
+                if calc_en == True and ok:  # rad is not None and
+                    bol_luminosity = calculate_bol_luminosity(self.lam, self.instrument_response, self.teff, self.r)
+
+                    energy = flare_energy(self.t[istart:istop],
+                                          self.mask_f[istart:istop] - np.mean(self.mask_f[istart - 5:istart]),
+                                          bol_luminosity)
+                    print("Flare energy = ", energy)
+                    # energies.append(np.log10(energy))
+
+                    # energy_mod = flare_energy(tmodel, fmodel, bol_luminosity)
+                    # print("Flare energy (model) = ", energy_mod)
+                    # energies_mod.append(np.log10(energy_mod))
+
+                    self.flare_energies.append(np.log10(energy))
+                    self.flare_model_energies.append(np.log10(0))
+
+                else:
+                    self.flare_energies.append(0)
+                    self.flare_model_energies.append(0)
+
+            self.flare_mask = fmask
+            self.flares_checked = True
+            print(self.flare_energies)
 
     def plot_split(self, y1, y2, tpeaks, rec, pltname):
-        ts, split = statistics.flare_stats.split_multilc(self.t)
-        y2s = statistics.flare_stats.statistics.flare_stats.statistics.flare_stats.np.split(y2, split)
+        ts, split = split_multilc(self.t)
+        y2s = np.split(y2, split)
         # ts, split = split_multilc(self.t)
-        y1s = statistics.flare_stats.statistics.flare_stats.statistics.flare_stats.np.split(y1, split)
+        y1s = np.split(y1, split)
         # *********************
-        fig, ax = statistics.flare_stats.plt.subplots(ncols=len(split) + 1, nrows=2, figsize=(42, 8), sharey=True, sharex=True)
-        statistics.flare_stats.plt.subplots_adjust(wspace=0.0)
+        fig, ax = plt.subplots(ncols=len(split) + 1, nrows=2, figsize=(42, 8), sharey=True, sharex=True)
+        plt.subplots_adjust(wspace=0.0)
         if len(split) > 1:
             for i in range(len(split) + 1):
                 for tp in range(len(tpeaks)):
                     if tpeaks[tp] >= ts[i][0] and tpeaks[tp] < ts[i][-1]:
                         if rec[tp] == 1.0:
-                            ax[1][i].axvline(statistics.flare_stats.statistics.flare_stats.math.modf(tpeaks[tp])[0], color='g')
+                            ax[1][i].axvline(math.modf(tpeaks[tp])[0], color='g')
                         else:
-                            ax[1][i].axvline(statistics.flare_stats.statistics.flare_stats.math.modf(tpeaks[tp])[0], color='r')
-                tminus = [statistics.flare_stats.statistics.flare_stats.math.modf(j)[0] for j in ts[i]]
+                            ax[1][i].axvline(math.modf(tpeaks[tp])[0], color='r')
+                tminus = [math.modf(j)[0] for j in ts[i]]
                 ax[0][i].plot(tminus, y1s[i], 'k.')
                 ax[1][i].plot(tminus, y2s[i], 'k.')
         else:
             for tp in tpeaks:
-                ax[1][0].axvline(statistics.flare_stats.statistics.flare_stats.math.modf(tp)[0], color='r')
-            tminus = [statistics.flare_stats.statistics.flare_stats.math.modf(j)[0] for j in ts[0]]
+                ax[1][0].axvline(math.modf(tp)[0], color='r')
+            tminus = [math.modf(j)[0] for j in ts[0]]
             ax[0][0].plot(tminus, y1s[0], 'k.')
             ax[1][0].plot(tminus, y2s[0], 'k.')
         # *********************
-        statistics.flare_stats.plt.tight_layout()
+        plt.tight_layout()
         # plt.show()
-        statistics.flare_stats.plt.savefig(pltname)
-        statistics.flare_stats.plt.close()
+        plt.savefig(pltname)
+        plt.close()
 
+
+def check_flares_bw(flaremask, bw_mask, ipeaks):
+    flares_start, flares_stop, flares_peaks = [], [], []
+    istart, istop = 0, 0
+    fprev = flaremask[0]
+    # count_flares = -1
+
+    for f in range(len(flaremask)):
+        # don't fit for flares observed during bad weather
+        if bw_mask[f] == 0:
+            if flaremask[f] == 1:
+                if fprev == 0:
+                    istart = f
+                    # count_flares = count_flares + 1
+            else:
+                if fprev == 1:
+                    istop = f
+                    flares_start.append(istart)
+                    flares_stop.append(istop)
+                    # flares_peaks.append(ipeaks[count_flares])
+
+            fprev = flaremask[f]
+        else:
+            # if f>0:
+            #     if flaremask[f] == 1 and flaremask[f-1]==0:
+            # there's a flare but it's at the same time as bad weather
+            # count_flares = count_flares+1
+
+            fprev = 0
+
+    print(ipeaks)
+    print(flares_start, flares_stop)  # ,flares_peaks)
+
+    if len(flares_start) != len(flares_stop):
+        flares_stop.append(f)
+
+    return flares_start, flares_stop
+
+from flare_inject_recovery import generate_flare_distribution, mod_random

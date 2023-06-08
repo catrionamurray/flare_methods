@@ -69,23 +69,39 @@ def in_bins(bins, x, y, width):
 
     return bindict
 
-
-def split_multilc(t):
+def split_multilc(t, y):
     start = t[0]
     t = np.array(t)
-    nextdays = t[np.absolute(t - start) > 0.5]
-    split = []
-    while nextdays != []:
+    nextdays=t[np.absolute(t-start)>0.5]
+    split=[]
+    while nextdays!=[]:
         start = nextdays[0]
-        ind_st = np.where(t == start)[0][0]
+        ind_st = np.where(t==start)[0][0]
         split.append(ind_st)
         time = t[ind_st:]
-        nextdays = time[np.absolute(time - start) > 0.5]
+        nextdays = time[np.absolute(time-start) > 0.5]
 
-    times = np.split(t, split)
-    # xs=np.split(x,split)
+    times=np.split(t,split)
+    ys=np.split(y,split)
 
-    return times, split
+    return times, ys, split
+#
+# def split_multilc(t):
+#     start = t[0]
+#     t = np.array(t)
+#     nextdays = t[np.absolute(t - start) > 0.5]
+#     split = []
+#     while nextdays != []:
+#         start = nextdays[0]
+#         ind_st = np.where(t == start)[0][0]
+#         split.append(ind_st)
+#         time = t[ind_st:]
+#         nextdays = time[np.absolute(time - start) > 0.5]
+#
+#     times = np.split(t, split)
+#     # xs=np.split(x,split)
+#
+#     return times, split
 
 def get_total_observed_time(t):
     ts, split = split_multilc(t)
@@ -170,18 +186,24 @@ def calculate_running_mean(x, y, boxsize):
     dy = running_box(x, y, boxsize, 'mean')
     return dy
 
-def get_response(fname):
+def get_response_csv(fname, wave_units="micron"):
     lam, response = [], []
     with open(fname, 'r') as rfile:
         reader = csv.reader(rfile)
         for row in reader:
             try:
                 # print(float(row[0]))
-                lam.append(0.000001 * float(row[0]))  # m
+                lam.append((float(row[0]) * u.Unit(wave_units)).to_value('m'))  # m
                 response.append(float(row[1]))
             except:
                 pass
     rfile.close()
+    return np.array(lam), np.array(response)
+
+def get_response_txt(fname, wave_units="micron"):
+    response_table = ascii.read(fname)
+    lam = (response_table.columns[0] * u.Unit(wave_units)).to_value('m')
+    response = response_table.columns[1]
     return np.array(lam), np.array(response)
 
 def tel_response(lam, response, wavelength):
